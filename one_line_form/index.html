@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>One-line Form (HTML) — People</title>
+  <style>
+    :root{font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;}
+    body{max-width:1000px;margin:28px auto;padding:20px;background:#f6f8fb}
+    h1{font-size:20px;margin-bottom:10px}
+    .card{background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(24,39,75,0.05)}
+    form.one-line{display:flex;gap:8px;align-items:center;margin-bottom:14px}
+    input[type="text"],input[type="number"]{padding:8px 10px;border-radius:8px;border:1px solid #d7dbe6;font-size:14px;min-width:140px}
+    button.primary{padding:9px 14px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer}
+    button.primary:disabled{opacity:0.6}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{padding:10px;border-bottom:1px solid #eef2f7;text-align:left;font-size:14px}
+    th{background:#fbfdff;color:#111;font-weight:600}
+    .status-toggle{padding:6px 10px;border-radius:8px;border:0;cursor:pointer}
+    .status-1{background:#16a34a;color:#fff}
+    .status-0{background:#dc2626;color:#fff}
+    .small{font-size:13px;color:#6b7280}
+    .error{color:#b91c1c;margin-top:12px}
+    .center{text-align:center}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>People — Add & Toggle Status</h1>
+    <div class="small">Add a person (status defaults to 0). Toggle flips status immediately.</div>
+
+    <form id="addForm" class="one-line" onsubmit="return false;">
+      <input id="name" name="name" type="text" placeholder="Name" required autocomplete="off" />
+      <input id="age"  name="age"  type="number" placeholder="Age" min="1" required />
+      <button id="submitBtn" class="primary" type="submit">Submit</button>
+    </form>
+
+    <div id="errorMsg" class="error" style="display:none"></div>
+
+    <table id="peopleTable" aria-live="polite">
+      <thead>
+        <tr><th style="width:60px">ID</th><th>Name</th><th style="width:80px">Age</th><th style="width:80px">Status</th><th style="width:180px">Created</th><th style="width:110px">Action</th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="6" class="center small">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+/*
+  index.html JavaScript:
+  - Expects backend.php in same folder.
+  - GET backend.php -> { success: true, rows: [...] }
+  - POST backend.php action=add|toggle
+*/
+
+const API = 'backend.php';
+const errorEl = document.getElementById('errorMsg');
+const tbody = document.querySelector('#peopleTable tbody');
+const submitBtn = document.getElementById('submitBtn');
+
+// HTML-escape helper
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[m]);
+}
+
+// show error
+function showError(msg){
+  errorEl.textContent = msg;
+  errorEl.style.display = 'block';
+}
+
+// hide error
+function hideError(){
+  errorEl.style.display = 'none';
+}
+
+// fetch rows (robust to a couple response shapes)
+async function fetchRows(){
+  const res = await fetch(API, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Network error: ' + res.status);
+  const j = await res.json();
+  // Accept either array or { success:true, rows: [...] }
+  if (Array.isArray(j)) return j;
+  if (j && typeof j === 'object') {
+    if (Array.isArray(j.rows)) return j.rows;
+    if (Array.isArray(j.data)) return j.data;
+    // if j.success && j.rows missing, maybe old shape: return empty
+  }
+  throw new Error('Unexpected API response');
+}
+
+// render table rows
+function renderTable(rows){
+  tbody.innerHTML = '';
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="small center">No records found.</td></tr>';
+    return;
+  }
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.id = 'row-' + p.id;
+    tr.innerHTML = `
+      <td>${p.id}</td>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${p.age}</td>
+      <td class="status" data-id="${p.id}">${p.status}</td>
+      <td>${p.created_at ?? ''}</td>
+      <td><button class="status-toggle ${p.status==1? 'status-1':'status-0'}" data-id="${p.id}">Toggle</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// load + render
+async function loadAndRender(){
+  try {
+    hideError();
+    const rows = await fetchRows();
+    renderTable(rows);
+  } catch (err) {
+    console.error('Load error', err);
+    showError('Could not load data: ' + err.message);
+    tbody.innerHTML = '<tr><td colspan="6" class="small center">Failed to load data.</td></tr>';
+  }
+}
+
+// helper to POST form-encoded
+async function postData(data){
+  const form = new URLSearchParams();
+  for (const k in data) form.append(k, data[k]);
+  const res = await fetch(API, { method: 'POST', body: form });
+  if (!res.ok) throw new Error('Network error: ' + res.status);
+  return res.json();
+}
+
+// handle add
+document.getElementById('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = document.getElementById('name').value.trim();
+  const age = document.getElementById('age').value.trim();
+  if (!name || !age) { alert('Enter name & age'); return; }
+  submitBtn.disabled = true;
+  try {
+    const res = await postData({ action: 'add', name, age });
+    if (res && res.success && res.person) {
+      // reload table to get accurate created_at and order
+      await loadAndRender();
+      e.target.reset();
+    } else if (res && res.success === false) {
+      alert(res.message || 'Add failed');
+    } else {
+      // fallback: reload table
+      await loadAndRender();
+    }
+  } catch (err) {
+    console.error('Add failed', err);
+    alert('Add request failed: ' + err.message);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+// delegated toggle clicking
+tbody.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button.status-toggle');
+  if (!btn) return;
+  btn.disabled = true;
+  const id = btn.dataset.id;
+  try {
+    const res = await postData({ action: 'toggle', id });
+    // Accept { success:true, status:0|1 } or older shapes
+    if (res && typeof res.status !== 'undefined') {
+      const row = document.getElementById('row-' + id);
+      if (row) {
+        const statusCell = row.querySelector('.status');
+        statusCell.textContent = res.status;
+        if (res.status == 1) { btn.classList.remove('status-0'); btn.classList.add('status-1'); }
+        else { btn.classList.remove('status-1'); btn.classList.add('status-0'); }
+      } else {
+        // if row missing, reload the full list
+        await loadAndRender();
+      }
+    } else {
+      // fallback: reload list
+      await loadAndRender();
+    }
+  } catch (err) {
+    console.error('Toggle failed', err);
+    alert('Toggle failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// initial load
+loadAndRender();
+</script>
+</body>
+</html>
